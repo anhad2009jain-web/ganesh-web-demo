@@ -214,12 +214,33 @@ lightbox.addEventListener("keydown", (event) => {
 });
 lightbox.addEventListener("close", () => lightboxTrigger?.focus());
 
-// Testimonial carousel.
-const testimonials = [...document.querySelectorAll(".testimonial")];
-const reviewDots = [...document.querySelectorAll("[data-review]")];
+// Customer Reviews CMS integration and testimonial carousel.
+const REVIEWS_API_URL = "https://api.github.com/repos/anhad2009jain-web/ganesh-web-demo/contents/content/reviews?ref=main";
+const testimonialCarousel = document.querySelector(".testimonial-carousel");
+const testimonialSection = document.querySelector("#testimonials");
+const previousReviewButton = document.querySelector("#testimonial-prev");
+const nextReviewButton = document.querySelector("#testimonial-next");
+let testimonials = [];
+let reviewDots = [];
 let activeReview = 0;
 let reviewTimer;
+
+function showReviewMessage(message) {
+  window.clearInterval(reviewTimer);
+  testimonials = [];
+  reviewDots = [];
+  const status = document.createElement("p");
+  status.className = "testimonial-status";
+  status.id = "review-status";
+  status.setAttribute("role", "status");
+  status.textContent = message;
+  testimonialCarousel.replaceChildren(status);
+  previousReviewButton.disabled = true;
+  nextReviewButton.disabled = true;
+}
+
 function showReview(index) {
+  if (!testimonials.length) return;
   activeReview = (index + testimonials.length) % testimonials.length;
   testimonials.forEach((review, i) => {
     review.hidden = i !== activeReview;
@@ -230,19 +251,145 @@ function showReview(index) {
     dot.setAttribute("aria-pressed", String(i === activeReview));
   });
 }
+
 function startReviews() {
   window.clearInterval(reviewTimer);
-  if (!reducedMotion.matches) reviewTimer = window.setInterval(() => showReview(activeReview + 1), 7000);
+  if (testimonials.length > 1 && !reducedMotion.matches) {
+    reviewTimer = window.setInterval(() => showReview(activeReview + 1), 7000);
+  }
 }
-document.querySelector("#testimonial-prev").addEventListener("click", () => { showReview(activeReview - 1); startReviews(); });
-document.querySelector("#testimonial-next").addEventListener("click", () => { showReview(activeReview + 1); startReviews(); });
-reviewDots.forEach((dot) => dot.addEventListener("click", () => { showReview(Number(dot.dataset.review)); startReviews(); }));
-const testimonialSection = document.querySelector("#testimonials");
+
+function createStars() {
+  const stars = document.createElement("div");
+  stars.className = "stars";
+  stars.setAttribute("aria-label", "5 out of 5 stars");
+  for (let i = 0; i < 5; i += 1) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#icon-star");
+    svg.append(use);
+    stars.append(svg);
+  }
+  return stars;
+}
+
+function customerInitials(name) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
+
+function createReviewArticle(review, index) {
+  const article = document.createElement("article");
+  article.className = `testimonial${index === 0 ? " is-active" : ""}`;
+  article.dataset.testimonial = String(index);
+  article.hidden = index !== 0;
+
+  const quote = document.createElement("blockquote");
+  quote.textContent = `“${review.review.trim()}”`;
+
+  const reviewer = document.createElement("div");
+  reviewer.className = "reviewer";
+  const initials = document.createElement("span");
+  initials.textContent = customerInitials(review.name);
+  const reviewerDetails = document.createElement("div");
+  const customerName = document.createElement("strong");
+  customerName.textContent = review.name.trim();
+  const eventLocation = document.createElement("small");
+  eventLocation.textContent = [review.event, review.location]
+    .filter((value) => typeof value === "string" && value.trim())
+    .map((value) => value.trim())
+    .join(" · ");
+  reviewerDetails.append(customerName, eventLocation);
+  reviewer.append(initials, reviewerDetails);
+  article.append(createStars(), quote, reviewer);
+  return article;
+}
+
+function renderReviews(reviews) {
+  window.clearInterval(reviewTimer);
+  activeReview = 0;
+  testimonialCarousel.replaceChildren();
+  testimonials = reviews.map((review, index) => createReviewArticle(review, index));
+
+  const dotsContainer = document.createElement("div");
+  dotsContainer.className = "carousel-dots";
+  dotsContainer.setAttribute("role", "group");
+  dotsContainer.setAttribute("aria-label", "Choose testimonial");
+  reviewDots = reviews.map((review, index) => {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.dataset.review = String(index);
+    dot.setAttribute("aria-label", `Show review ${index + 1}`);
+    dot.setAttribute("aria-pressed", String(index === 0));
+    dot.classList.toggle("is-active", index === 0);
+    dotsContainer.append(dot);
+    return dot;
+  });
+
+  testimonialCarousel.append(...testimonials, dotsContainer);
+  previousReviewButton.disabled = reviews.length < 2;
+  nextReviewButton.disabled = reviews.length < 2;
+  startReviews();
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!response.ok) throw new Error(`Review request failed with HTTP ${response.status}`);
+  return response.json();
+}
+
+async function loadReviews() {
+  try {
+    const cacheBuster = Date.now();
+    const listing = await fetchJson(`${REVIEWS_API_URL}&_=${cacheBuster}`);
+    if (!Array.isArray(listing)) throw new Error("The reviews directory response was not a file list");
+    const jsonFiles = listing.filter((file) => file.type === "file" && file.name.toLowerCase().endsWith(".json") && file.download_url);
+
+    const results = await Promise.allSettled(jsonFiles.map(async (file) => {
+      const fileUrl = new URL(file.download_url);
+      fileUrl.searchParams.set("v", file.sha || cacheBuster);
+      const review = await fetchJson(fileUrl);
+      if (!review || typeof review.name !== "string" || !review.name.trim() || typeof review.review !== "string" || !review.review.trim()) {
+        throw new Error(`Invalid review data in ${file.name}`);
+      }
+      return review;
+    }));
+
+    results.forEach((result, index) => {
+      if (result.status === "rejected") console.warn(`Could not load review ${jsonFiles[index].name}:`, result.reason);
+    });
+    const reviews = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
+    const featuredReviews = reviews.filter((review) => review.featured === true);
+
+    if (!featuredReviews.length) {
+      const loadFailed = jsonFiles.length > 0 && reviews.length === 0;
+      showReviewMessage(loadFailed
+        ? "We couldn’t load customer reviews right now. Please try again later."
+        : "No featured customer reviews yet. Please check back soon.");
+      return;
+    }
+    renderReviews(featuredReviews);
+  } catch (error) {
+    console.error("Could not load customer reviews:", error);
+    showReviewMessage("We couldn’t load customer reviews right now. Please try again later.");
+  }
+}
+
+previousReviewButton.addEventListener("click", () => { showReview(activeReview - 1); startReviews(); });
+nextReviewButton.addEventListener("click", () => { showReview(activeReview + 1); startReviews(); });
+testimonialCarousel.addEventListener("click", (event) => {
+  const dot = event.target.closest("[data-review]");
+  if (!dot) return;
+  showReview(Number(dot.dataset.review));
+  startReviews();
+});
 testimonialSection.addEventListener("mouseenter", () => window.clearInterval(reviewTimer));
 testimonialSection.addEventListener("mouseleave", startReviews);
 testimonialSection.addEventListener("focusin", () => window.clearInterval(reviewTimer));
 testimonialSection.addEventListener("focusout", startReviews);
-startReviews();
+loadReviews();
 
 // Required-field validation and WhatsApp appointment handoff.
 const bookingForm = document.querySelector("#booking-form");
