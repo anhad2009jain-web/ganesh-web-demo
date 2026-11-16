@@ -1,0 +1,164 @@
+media:
+  - name: images
+    label: Website Images
+    input: media/images
+    output: /media/images
+    extensions:
+      - jpg
+      - jpeg
+      - png
+      - webp
+    categories:
+      - image
+    rename: safe
+
+content:
+  - name: site
+    label: Studio Settings
+    type: file
+    path: content/site.json
+    format: json
+    fields:
+      - name: studioName
+        label: Studio Name
+        type: string
+
+      - name: heroTitle
+        label: Homepage Heading
+        type: string
+
+      - name: heroDescription
+        label: Homepage Description
+        type: text
+
+      - name: experience
+        label: Years of Experience
+        type: number
+
+      - name: eventsCovered
+        label: Events Covered
+        type: number
+
+      - name: phone
+        label: Phone Number
+        type: string
+
+      - name: whatsapp
+        label: WhatsApp Number
+        type: string
+
+      - name: address
+        label: Studio Address
+        type: text
+
+      - name: instagram
+        label: Instagram URL
+        type: string
+
+  - name: services
+    label: Services
+    type: collection
+    path: content/services
+    filename: "{primary}.json"
+    format: json
+    fields:
+      - name: title
+        label: Service Name
+        type: string
+
+      - name: description
+        label: Description
+        type: text
+
+      - name: image
+        label: Service Image
+        type: image
+        options:
+          media: images
+
+      - name: featured
+        label: Show on Website
+        type: boolean
+
+  - name: reviews
+    label: Customer Reviews
+    type: collection
+    path: content/reviews
+    filename: "{primary}.json"
+    format: json
+    fields:
+      - name: name
+        label: Customer Name
+        type: string
+
+      - name: review
+        label: Review Text
+        type: text
+
+      - name: event
+        label: Event Type
+        type: string
+
+      - name: location
+        label: Location
+        type: string
+
+      - name: featured
+        label: Display Review
+        type: boolean
+
+  - name: portfolio
+    label: Portfolio Gallery
+    type: collection
+    path: content/portfolio
+    filename: "{primary}.json"
+    format: json
+    fields:
+      - name: title
+        label: Image Title
+        type: string
+
+      - name: category
+        label: Category
+        type: select
+        options:
+          values:
+            - Wedding
+            - Portraits
+            - Events
+            - Fashion
+
+      - name: image
+        label: Portfolio Image
+        type: image
+        options:
+          media: images
+
+      - name: featured
+        label: Display Image
+        type: boolean
+
+  - name: products
+    label: Studio Products
+    type: collection
+    path: content/products
+    filename: "{primary}.json"
+    format: json
+    fields:
+      - name: title
+        label: Product Name
+        type: string
+
+      - name: description
+        label: Description
+        type: text
+
+      - name: image
+        label: Product Image
+        type: image
+        options:
+          media: images
+
+      - name: featured
+        label: Display Product
+        type: boolean
