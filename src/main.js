@@ -157,13 +157,16 @@ if ("IntersectionObserver" in window) {
   counters.forEach((counter) => counterObserver.observe(counter));
 }
 
-// Filterable portfolio.
+// CMS-driven, filterable portfolio.
 const filterButtons = [...document.querySelectorAll(".filter")];
-const galleryItems = [...document.querySelectorAll(".gallery-item")];
-filterButtons.forEach((button) => button.addEventListener("click", () => {
-  const category = button.dataset.filter;
+const galleryGrid = document.querySelector(".masonry-gallery");
+const galleryNote = document.querySelector(".gallery-note");
+let galleryItems = [];
+let activeGalleryFilter = "all";
+function applyGalleryFilter(category) {
+  activeGalleryFilter = category;
   filterButtons.forEach((item) => {
-    const selected = item === button;
+    const selected = item.dataset.filter === category;
     item.classList.toggle("is-active", selected);
     item.setAttribute("aria-pressed", String(selected));
   });
@@ -173,7 +176,8 @@ filterButtons.forEach((button) => button.addEventListener("click", () => {
     item.setAttribute("aria-hidden", String(!visible));
     item.tabIndex = visible ? 0 : -1;
   });
-}));
+}
+filterButtons.forEach((button) => button.addEventListener("click", () => applyGalleryFilter(button.dataset.filter)));
 
 // Accessible lightbox with keyboard, backdrop, and previous/next controls.
 const lightbox = document.querySelector("#lightbox");
@@ -198,10 +202,14 @@ function openLightbox(item) {
 }
 function moveLightbox(direction) {
   const visibleItems = visibleGalleryItems();
+  if (!visibleItems.length) return;
   const nextIndex = (activeGalleryItem + direction + visibleItems.length) % visibleItems.length;
   renderLightbox(visibleItems[nextIndex]);
 }
-galleryItems.forEach((item) => item.addEventListener("click", () => openLightbox(item)));
+galleryGrid.addEventListener("click", (event) => {
+  const item = event.target.closest(".gallery-item");
+  if (item) openLightbox(item);
+});
 document.querySelector(".lightbox-close").addEventListener("click", () => lightbox.close());
 document.querySelector(".lightbox-prev").addEventListener("click", () => moveLightbox(-1));
 document.querySelector(".lightbox-next").addEventListener("click", () => moveLightbox(1));
@@ -214,8 +222,35 @@ lightbox.addEventListener("keydown", (event) => {
 });
 lightbox.addEventListener("close", () => lightboxTrigger?.focus());
 
+function renderPortfolio(items) {
+  galleryGrid.replaceChildren();
+  galleryItems = items.map((item, index) => {
+    const button = document.createElement("button");
+    const layoutClass = index === 2 ? " wide" : ([0, 3, 5, 7].includes(index) ? " tall" : "");
+    button.className = `gallery-item${layoutClass} reveal is-visible`;
+    button.type = "button";
+    button.dataset.category = item.category.trim().toLowerCase();
+    button.dataset.full = cmsAssetUrl(item.image);
+    button.dataset.caption = `${item.category.trim()} · ${item.title.trim()}`;
+
+    const image = document.createElement("img");
+    image.src = cmsAssetUrl(item.image);
+    image.alt = item.title.trim();
+    image.loading = "lazy";
+    const caption = document.createElement("span");
+    const category = document.createElement("small");
+    category.textContent = item.category.trim();
+    caption.append(category, document.createTextNode(item.title.trim()));
+    button.append(image, caption);
+    galleryGrid.append(button);
+    return button;
+  });
+  galleryNote.hidden = items.length > 0;
+  galleryNote.textContent = items.length ? "" : "No featured portfolio images yet. Please check back soon.";
+  applyGalleryFilter(activeGalleryFilter);
+}
+
 // Customer Reviews CMS integration and testimonial carousel.
-const REVIEWS_API_URL = "https://api.github.com/repos/anhad2009jain-web/ganesh-web-demo/contents/content/reviews?ref=main";
 const testimonialCarousel = document.querySelector(".testimonial-carousel");
 const testimonialSection = document.querySelector("#testimonials");
 const previousReviewButton = document.querySelector("#testimonial-prev");
@@ -336,36 +371,54 @@ async function fetchJson(url) {
     cache: "no-store",
     headers: { Accept: "application/vnd.github+json" },
   });
-  if (!response.ok) throw new Error(`Review request failed with HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`CMS request failed with HTTP ${response.status}`);
   return response.json();
+}
+
+const CMS_API_ROOT = "https://api.github.com/repos/anhad2009jain-web/ganesh-web-demo/contents/content";
+const CMS_RAW_ROOT = "https://raw.githubusercontent.com/anhad2009jain-web/ganesh-web-demo/main";
+
+function cmsAssetUrl(path) {
+  if (typeof path !== "string" || !path.trim()) return "";
+  if (/^(https?:|data:)/.test(path)) return path;
+  return new URL(path.replace(/^\/+/, ""), document.baseURI).href;
+}
+
+async function fetchCmsCollection(collection, validate) {
+  const cacheBuster = Date.now();
+  const listing = await fetchJson(`${CMS_API_ROOT}/${collection}?ref=main&_=${cacheBuster}`);
+  if (!Array.isArray(listing)) throw new Error(`The ${collection} directory response was not a file list`);
+  const jsonFiles = listing.filter((file) => file.type === "file" && file.name.toLowerCase().endsWith(".json") && file.download_url);
+  const results = await Promise.allSettled(jsonFiles.map(async (file) => {
+    const fileUrl = new URL(file.download_url);
+    fileUrl.searchParams.set("v", file.sha || cacheBuster);
+    const item = await fetchJson(fileUrl);
+    validate(item, file.name);
+    return item;
+  }));
+  results.forEach((result, index) => {
+    if (result.status === "rejected") console.warn(`Could not load ${collection}/${jsonFiles[index].name}:`, result.reason);
+  });
+  return {
+    items: results.filter((result) => result.status === "fulfilled").map((result) => result.value),
+    total: jsonFiles.length,
+  };
+}
+
+function requireText(item, fields, filename) {
+  if (!item || fields.some((field) => typeof item[field] !== "string" || !item[field].trim())) {
+    throw new Error(`Invalid CMS data in ${filename}`);
+  }
 }
 
 async function loadReviews() {
   try {
-    const cacheBuster = Date.now();
-    const listing = await fetchJson(`${REVIEWS_API_URL}&_=${cacheBuster}`);
-    if (!Array.isArray(listing)) throw new Error("The reviews directory response was not a file list");
-    const jsonFiles = listing.filter((file) => file.type === "file" && file.name.toLowerCase().endsWith(".json") && file.download_url);
-
-    const results = await Promise.allSettled(jsonFiles.map(async (file) => {
-      const fileUrl = new URL(file.download_url);
-      fileUrl.searchParams.set("v", file.sha || cacheBuster);
-      const review = await fetchJson(fileUrl);
-      if (!review || typeof review.name !== "string" || !review.name.trim() || typeof review.review !== "string" || !review.review.trim()) {
-        throw new Error(`Invalid review data in ${file.name}`);
-      }
-      return review;
-    }));
-
-    results.forEach((result, index) => {
-      if (result.status === "rejected") console.warn(`Could not load review ${jsonFiles[index].name}:`, result.reason);
+    const { items: reviews, total } = await fetchCmsCollection("reviews", (review, filename) => {
+      requireText(review, ["name", "review"], filename);
     });
-    const reviews = results.filter((result) => result.status === "fulfilled").map((result) => result.value);
     const featuredReviews = reviews.filter((review) => review.featured === true);
-
     if (!featuredReviews.length) {
-      const loadFailed = jsonFiles.length > 0 && reviews.length === 0;
-      showReviewMessage(loadFailed
+      showReviewMessage(total > 0 && reviews.length === 0
         ? "We couldn’t load customer reviews right now. Please try again later."
         : "No featured customer reviews yet. Please check back soon.");
       return;
@@ -374,6 +427,169 @@ async function loadReviews() {
   } catch (error) {
     console.error("Could not load customer reviews:", error);
     showReviewMessage("We couldn’t load customer reviews right now. Please try again later.");
+  }
+}
+
+function applySiteSettings(site) {
+  STUDIO_CONFIG.name = typeof site.studioName === "string" && site.studioName.trim() ? site.studioName.trim() : STUDIO_CONFIG.name;
+  STUDIO_CONFIG.phoneDisplay = typeof site.phone === "string" && site.phone.trim() ? site.phone.trim() : STUDIO_CONFIG.phoneDisplay;
+  STUDIO_CONFIG.phoneLink = STUDIO_CONFIG.phoneDisplay.startsWith("+") ? STUDIO_CONFIG.phoneDisplay.replace(/[^+\d]/g, "") : `+${STUDIO_CONFIG.phoneDisplay.replace(/\D/g, "")}`;
+  STUDIO_CONFIG.whatsappNumber = typeof site.whatsapp === "string" && site.whatsapp.trim() ? site.whatsapp.replace(/\D/g, "") : STUDIO_CONFIG.whatsappNumber;
+  STUDIO_CONFIG.address = typeof site.address === "string" && site.address.trim() ? site.address.trim() : STUDIO_CONFIG.address;
+  STUDIO_CONFIG.instagramUrl = typeof site.instagram === "string" && site.instagram.trim() ? site.instagram.trim() : STUDIO_CONFIG.instagramUrl;
+
+  document.querySelectorAll(".brand-copy strong").forEach((element) => { element.textContent = STUDIO_CONFIG.name; });
+  document.title = `${STUDIO_CONFIG.name} | Photography & Films in Jammu`;
+  if (typeof site.heroTitle === "string" && site.heroTitle.trim()) {
+    const words = site.heroTitle.trim().split(/\s+/);
+    const emphasis = words.splice(-2).join(" ");
+    const heading = document.querySelector(".hero h1");
+    const em = document.createElement("em");
+    em.textContent = emphasis;
+    heading.replaceChildren(document.createTextNode(`${words.join(" ")} `), em);
+  }
+  if (typeof site.heroDescription === "string" && site.heroDescription.trim()) {
+    document.querySelector(".hero-intro").textContent = site.heroDescription.trim();
+  }
+  if (Number.isFinite(site.experience)) {
+    const counter = document.querySelector('[data-counter="20"]');
+    counter.dataset.counter = String(site.experience);
+    counter.textContent = String(site.experience);
+  }
+  if (Number.isFinite(site.eventsCovered)) {
+    const counter = document.querySelector('[data-counter="1000"]');
+    counter.dataset.counter = String(site.eventsCovered);
+    counter.textContent = site.eventsCovered.toLocaleString("en-IN");
+  }
+
+  const updatedWhatsappBase = `https://wa.me/${STUDIO_CONFIG.whatsappNumber}`;
+  const messages = {
+    booking: `Hello ${STUDIO_CONFIG.name}, I'd like to discuss my upcoming event and check your availability.`,
+    general: `Hello ${STUDIO_CONFIG.name}, I'd like to know more about your photography services.`,
+    floating: "Hi, I'd like to know more about your photography services.",
+  };
+  document.querySelectorAll("[data-whatsapp]").forEach((link) => {
+    link.href = `${updatedWhatsappBase}?text=${encodeURIComponent(messages[link.dataset.whatsapp] || messages.general)}`;
+  });
+  document.querySelectorAll("[data-phone]").forEach((link) => { link.href = `tel:${STUDIO_CONFIG.phoneLink}`; });
+  document.querySelectorAll('[data-config="phoneDisplay"]').forEach((element) => { element.textContent = STUDIO_CONFIG.phoneDisplay; });
+  document.querySelectorAll('[data-config="address"]').forEach((element) => { element.textContent = STUDIO_CONFIG.address; });
+  const updatedMapQuery = encodeURIComponent(STUDIO_CONFIG.address);
+  document.querySelector("[data-map]").src = `https://www.google.com/maps?q=${updatedMapQuery}&output=embed`;
+  document.querySelector("[data-directions]").href = `https://www.google.com/maps/dir/?api=1&destination=${updatedMapQuery}`;
+  document.querySelector("[data-instagram]").href = STUDIO_CONFIG.instagramUrl === "[INSTAGRAM_URL]" ? "https://www.instagram.com/" : STUDIO_CONFIG.instagramUrl;
+}
+
+async function loadSiteSettings() {
+  try {
+    const site = await fetchJson(`${CMS_RAW_ROOT}/content/site.json?_=${Date.now()}`);
+    if (!site || typeof site !== "object" || Array.isArray(site)) throw new Error("Invalid studio settings");
+    applySiteSettings(site);
+  } catch (error) {
+    console.error("Could not load studio settings:", error);
+  }
+}
+
+function createIcon(name, className = "icon") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", className);
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", `#icon-${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function serviceIconName(title) {
+  const value = title.toLowerCase();
+  if (value.includes("pre-wedding") || value.includes("engagement")) return "heart";
+  if (value.includes("baby") || value.includes("kids")) return "baby";
+  if (value.includes("fashion") || value.includes("portfolio")) return "fashion";
+  if (value.includes("anniversary")) return "anniversary";
+  if (value.includes("convocation")) return "cap";
+  if (value.includes("concert")) return "music";
+  if (value.includes("conference") || value.includes("corporate")) return "briefcase";
+  return "rings";
+}
+
+function showCollectionMessage(container, message) {
+  const status = document.createElement("p");
+  status.className = "cms-status";
+  status.setAttribute("role", "status");
+  status.textContent = message;
+  container.replaceChildren(status);
+}
+
+async function loadServices() {
+  const grid = document.querySelector(".services-grid");
+  try {
+    const { items } = await fetchCmsCollection("services", (item, filename) => requireText(item, ["title", "description"], filename));
+    const services = items.filter((item) => item.featured === true);
+    if (!services.length) {
+      showCollectionMessage(grid, "No services are currently featured.");
+      return;
+    }
+    const cards = services.map((service) => {
+      const card = document.createElement("article");
+      card.className = "service-card reveal is-visible";
+      const title = document.createElement("h3");
+      title.textContent = service.title.trim();
+      const description = document.createElement("p");
+      description.textContent = service.description.trim();
+      const link = document.createElement("a");
+      link.href = "#booking";
+      link.setAttribute("aria-label", `Book ${service.title.trim()}`);
+      link.append(document.createTextNode("Enquire "), createIcon("arrow"));
+      card.append(createIcon(serviceIconName(service.title)), title, description, link);
+      return card;
+    });
+    grid.replaceChildren(...cards);
+  } catch (error) {
+    console.error("Could not load services:", error);
+    showCollectionMessage(grid, "We couldn’t load services right now. Please try again later.");
+  }
+}
+
+async function loadProducts() {
+  const grid = document.querySelector(".products-grid");
+  try {
+    const { items } = await fetchCmsCollection("products", (item, filename) => requireText(item, ["title", "description", "image"], filename));
+    const products = items.filter((item) => item.featured === true);
+    if (!products.length) {
+      showCollectionMessage(grid, "No products are currently featured.");
+      return;
+    }
+    const cards = products.map((product) => {
+      const card = document.createElement("article");
+      card.className = "product-card reveal is-visible";
+      const image = document.createElement("img");
+      image.src = cmsAssetUrl(product.image);
+      image.alt = product.title.trim();
+      image.loading = "lazy";
+      const details = document.createElement("div");
+      const title = document.createElement("h3");
+      title.textContent = product.title.trim();
+      const description = document.createElement("p");
+      description.textContent = product.description.trim();
+      details.append(title, description);
+      card.append(image, details);
+      return card;
+    });
+    grid.replaceChildren(...cards);
+  } catch (error) {
+    console.error("Could not load products:", error);
+    showCollectionMessage(grid, "We couldn’t load products right now. Please try again later.");
+  }
+}
+
+async function loadPortfolio() {
+  try {
+    const { items } = await fetchCmsCollection("portfolio", (item, filename) => requireText(item, ["title", "category", "image"], filename));
+    renderPortfolio(items.filter((item) => item.featured === true));
+  } catch (error) {
+    console.error("Could not load portfolio:", error);
+    galleryGrid.replaceChildren();
+    galleryNote.hidden = false;
+    galleryNote.textContent = "We couldn’t load the portfolio right now. Please try again later.";
   }
 }
 
@@ -389,6 +605,10 @@ testimonialSection.addEventListener("mouseenter", () => window.clearInterval(rev
 testimonialSection.addEventListener("mouseleave", startReviews);
 testimonialSection.addEventListener("focusin", () => window.clearInterval(reviewTimer));
 testimonialSection.addEventListener("focusout", startReviews);
+loadSiteSettings();
+loadServices();
+loadProducts();
+loadPortfolio();
 loadReviews();
 
 // Required-field validation and WhatsApp appointment handoff.
